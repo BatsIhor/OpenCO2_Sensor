@@ -19,6 +19,9 @@
 
 RTC_DATA_ATTR int refreshes = 1;
 RTC_DATA_ATTR UBYTE *BlackImage;
+extern bool BatteryMode;
+extern bool comingFromDeepSleep;
+extern int HWSubRev;
 
 sFONT big=bahn_big; //gotham_big nothing_big bahn_big
 sFONT mid=bahn_mid; //gotham_mid nothing_mid bahn_mid
@@ -194,6 +197,208 @@ void displayWriteMeasuerments(uint16_t co2, float temperature, float humidity) {
     Paint_DrawNum(240, 220, humidity, &big, BLACK, WHITE);
     Paint_DrawString_EN(340, 220, "%", &sml, WHITE, BLACK);
 #endif
+}
+
+#include "qrcode.h"
+#define ESP_QRCODE_CONFIG() (esp_qrcode_config_t) { \
+    .display_func = draw_qr_code, \
+    .max_qrcode_version = 26, \
+    .qrcode_ecc_level = ESP_QRCODE_ECC_LOW, \
+}
+
+void draw_qr_code(const uint8_t * qrcode) {
+  int qrcodeSize = esp_qrcode_get_size(qrcode);
+  int scaleFactor = 1;
+  extern uint8_t qrcodeNumber, hour;
+
+  if (qrcodeSize < 24)      scaleFactor = 7;
+  else if (qrcodeSize < 28) scaleFactor = 6;
+  else if (qrcodeSize < 34) scaleFactor = 5;
+  else if (qrcodeSize < 42) scaleFactor = 4;
+  else if (qrcodeSize < 56) scaleFactor = 3;
+  else if (qrcodeSize < 84) scaleFactor = 2;
+  
+  int Start = (200 - (qrcodeSize *scaleFactor)) / 2;
+  Paint_Clear(WHITE);
+  for (int y=0; y < qrcodeSize; y++) {
+    for (int x=0; x < qrcodeSize; x++) {
+      if (esp_qrcode_get_module(qrcode, x, y)) {
+        if (scaleFactor > 1) Paint_DrawRectangle(Start + x * scaleFactor,
+                                                 Start + y * scaleFactor,
+                                                 Start + x * scaleFactor + scaleFactor, 
+                                                 Start + y * scaleFactor + scaleFactor,
+                                                 BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+        else Paint_SetPixel(x + (200-qrcodeSize)/2, y + (200-qrcodeSize)/2, BLACK);
+      }
+    }
+  }
+
+  if (qrcodeNumber+1 >= 10) Paint_DrawNum(200-5*11, 200-16, qrcodeNumber+1, &Font16, BLACK, WHITE);
+  else Paint_DrawNum(200-4*11, 200-16, qrcodeNumber+1, &Font16, BLACK, WHITE);
+  Paint_DrawString_EN(200-3*11, 200-16, "/", &Font16, WHITE, BLACK);
+  Paint_DrawNum(200-2*11, 200-16, hour+1, &Font16, BLACK, WHITE);
+  updateDisplay();
+}
+
+void displayQRcode(uint16_t measurements[24][120]) {
+  extern uint8_t halfminute, hour, qrcodeNumber;
+  char buffer[5*120+1];
+  int numEnties = halfminute;
+  if (hour > qrcodeNumber) numEnties = 120; // display all values included in previous hours
+
+  for (int i=0; i<numEnties; i++) {
+    char tempStr[6];
+    snprintf(tempStr, sizeof(tempStr), "%d", measurements[qrcodeNumber][i]);
+
+    if (i == 0) snprintf(buffer, sizeof(buffer), "%s", tempStr);
+    else snprintf(buffer + strlen(buffer), sizeof(buffer) - strlen(buffer), " %s", tempStr);
+  }
+
+  esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG();
+  esp_qrcode_generate(&cfg, buffer);
+}
+
+void displayMenu(uint8_t selectedOption) {
+  extern const char* menuItems[NUM_OPTIONS];
+  Paint_Clear(WHITE);
+  Paint_DrawString_EN(66, 1, "Menu", &Font24, WHITE, BLACK);
+  Paint_DrawLine(10, 25, 190, 25, BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+
+  for (int i=0; i<NUM_OPTIONS; i++) {
+    if (i == selectedOption) {
+      Paint_DrawRectangle(0, 29*(i+1), 200, (i+2)*29, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+      Paint_DrawString_EN(5, 29*(i+1)+2, menuItems[i], &Font24, BLACK, WHITE);
+    } else {
+      Paint_DrawString_EN(5, 29*(i+1)+2, menuItems[i], &Font24, WHITE, BLACK);
+    }
+  }
+
+  updateDisplay();
+}
+
+void displayCalibrationWarning() {
+  Paint_Clear(BLACK);
+
+  // Exclamation Mark !
+  Paint_DrawLine( 100,  50, 100,  85, WHITE, DOT_PIXEL_4X4, LINE_STYLE_SOLID);
+  Paint_DrawCircle(100, 105,   5, WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+
+                // Xstart,Ystart,Xend,Yend
+  Paint_DrawLine( 100,  20,  35, 120, WHITE, DOT_PIXEL_3X3, LINE_STYLE_SOLID);
+  Paint_DrawLine( 100,  20, 165, 120, WHITE, DOT_PIXEL_3X3, LINE_STYLE_SOLID);
+  Paint_DrawLine(  37, 120, 163, 120, WHITE, DOT_PIXEL_4X4, LINE_STYLE_SOLID);
+  
+  Paint_DrawString_EN(16, 132, "Calibration!", &Font20, BLACK, WHITE);
+  Paint_DrawString_EN(1, 152, "Put Sensor outside", &Font16, BLACK, WHITE);
+  Paint_DrawString_EN(1, 168, "for 3+ minutes. Or", &Font16, BLACK, WHITE);
+  Paint_DrawString_EN(1, 184, "hold knob to stop", &Font16, BLACK, WHITE);
+
+  updateDisplay();
+}
+
+void displayWiFi(bool useWiFi) {
+  Paint_Clear(BLACK);
+
+  Paint_DrawCircle(100, 100,  25, WHITE, DOT_PIXEL_4X4, DRAW_FILL_EMPTY);
+  Paint_DrawCircle(100, 100,  50, WHITE, DOT_PIXEL_4X4, DRAW_FILL_EMPTY);
+  Paint_DrawCircle(100, 100,  75, WHITE, DOT_PIXEL_4X4, DRAW_FILL_EMPTY);
+                // Xstart,Ystart,Xend,Yend
+  Paint_DrawLine(  0,   4, 100, 104, BLACK, DOT_PIXEL_8X8, LINE_STYLE_SOLID);
+  Paint_DrawLine(  0,  12, 100, 112, BLACK, DOT_PIXEL_8X8, LINE_STYLE_SOLID);
+  Paint_DrawRectangle(0, 50, 60, 100, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawLine(200,   4, 100, 104, BLACK, DOT_PIXEL_8X8, LINE_STYLE_SOLID);
+  Paint_DrawLine(200,  12, 100, 112, BLACK, DOT_PIXEL_8X8, LINE_STYLE_SOLID);
+  Paint_DrawRectangle(140, 50, 200, 200, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawRectangle(0, 100, 200, 200, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+  Paint_DrawCircle(100, 95,   4, WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+
+  if (useWiFi) {
+    Paint_DrawString_EN(23, 132, "Wi-Fi: ON", &Font20, BLACK, WHITE);
+    if(BatteryMode) Paint_DrawString_EN(1, 152, "  Connect Power", &Font16, BLACK, WHITE);
+    Paint_DrawString_EN(1, 168, " 'OpenCO2 Sensor'", &Font16, BLACK, WHITE);
+    Paint_DrawString_EN(1, 184, "http://192.168.4.1", &Font16, BLACK, WHITE);
+  } else {
+    Paint_DrawLine( 60, 90, 140, 10, WHITE, DOT_PIXEL_4X4, LINE_STYLE_SOLID);
+    Paint_DrawString_EN(23, 132, "Wi-Fi: OFF", &Font20, BLACK, WHITE);
+  }
+
+  updateDisplay();
+}
+void displayWiFiStrengh() {
+  if (WiFi.status() != WL_CONNECTED) {
+    const unsigned char wifiAP[] = {
+      0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,
+      0XFB,0XFF,0XFF,0XFF,0XFF,0X00,0X1F,0XFF,0XFF,0XF8,0X00,0X07,0XFF,0XFF,0XF0,0XFF,
+      0XC1,0XFF,0XFF,0XE3,0XFF,0XF8,0XFF,0XFF,0XC7,0XFF,0XFC,0XFF,0XFF,0XFF,0X80,0X7F,
+      0XFF,0XFF,0XFE,0X00,0X0F,0XFF,0XFF,0XFC,0X3F,0X87,0XFF,0XFF,0XFC,0XFF,0XE7,0XFF,
+      0XFF,0XFF,0XFB,0XFF,0XFF,0XC7,0XFF,0XC0,0X7F,0XFE,0X07,0XFF,0X80,0X3F,0XE0,0X07,
+      0XFF,0X9F,0X3F,0X00,0X03,0XFF,0XFF,0XF0,0X00,0X03,0XFF,0XF1,0XE0,0X00,0X03,0XFF,
+      0XE1,0XC0,0X00,0X03,0XFF,0XE1,0XC0,0X00,0X03,0XFF,0XF1,0XE0,0X00,0X03,0XFF,0XFF,
+      0XF8,0X00,0X03,0XFF,0X9F,0X3F,0X00,0X03,0XFF,0X80,0X3F,0XF0,0X07,0XFF,0XC0,0XFF,
+      0XFE,0X07,0XFF,0XFF,0XFF,0XFF,0XE7,0XFC,0XFF,0XE7,0XFF,0XFF,0XFC,0X3F,0X87,0XFF,
+      0XFF,0XFE,0X00,0X1F,0XFF,0XFF,0XFF,0X80,0X7F,0XFF,0XFF,0XCF,0XFF,0XFC,0XFF,0XFF,
+      0XE3,0XFF,0XF8,0XFF,0XFF,0XF0,0XFF,0XC1,0XFF,0XFF,0XF8,0X00,0X07,0XFF,0XFF,0XFF,
+      0X00,0X1F,0XFF,0XFF,0XFF,0XF3,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,
+      0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF
+    };
+    Paint_DrawImage(wifiAP, 150, 150, 40, 40);
+    return;
+  }
+
+  int32_t signalStrength = WiFi.RSSI();
+  /*char signalStrengthText[10];
+  snprintf(signalStrengthText, sizeof(signalStrengthText), "%d", signalStrength);
+  Paint_DrawString_EN(50, 150, signalStrengthText, &Font24, WHITE, BLACK);*/
+
+  const unsigned char wifiFullIcon[] = {
+    0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X9F,0XFF,0XFF,0XFF,0XFF,0X87,0XFF,0XFF,0XFF,0XFF,
+    0X03,0XFF,0XFF,0XFF,0XFE,0X00,0XFF,0XFF,0XFF,0XFE,0X00,0X7F,0XFF,0XFF,0XFE,0X00,
+    0X3F,0XFF,0XFF,0XFC,0X00,0X0F,0XFF,0XFF,0XFC,0X00,0X07,0XFF,0XFF,0XF8,0X00,0X03,
+    0XFF,0XFF,0XF8,0X00,0X01,0XFF,0XFF,0XF8,0X00,0X00,0X7F,0XFF,0XF8,0X00,0X00,0X3F,
+    0XFF,0XF0,0X00,0X00,0X0F,0XFF,0XF0,0X00,0X00,0X07,0XFF,0XF0,0X00,0X00,0X03,0XFF,
+    0XF0,0X00,0X00,0X00,0XFF,0XF0,0X00,0X00,0X00,0X7F,0XF0,0X00,0X00,0X00,0X3F,0XF0,
+    0X00,0X00,0X00,0X0F,0XF0,0X00,0X00,0X00,0X0F,0XF0,0X00,0X00,0X00,0X3F,0XF0,0X00,
+    0X00,0X00,0X7F,0XF0,0X00,0X00,0X00,0XFF,0XF0,0X00,0X00,0X03,0XFF,0XF0,0X00,0X00,
+    0X07,0XFF,0XF0,0X00,0X00,0X0F,0XFF,0XF8,0X00,0X00,0X3F,0XFF,0XF8,0X00,0X00,0X7F,
+    0XFF,0XF8,0X00,0X01,0XFF,0XFF,0XF8,0X00,0X03,0XFF,0XFF,0XFC,0X00,0X07,0XFF,0XFF,
+    0XFC,0X00,0X0F,0XFF,0XFF,0XFE,0X00,0X3F,0XFF,0XFF,0XFE,0X00,0X7F,0XFF,0XFF,0XFE,
+    0X01,0XFF,0XFF,0XFF,0XFF,0X03,0XFF,0XFF,0XFF,0XFF,0X87,0XFF,0XFF,0XFF,0XFF,0X9F,
+    0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF
+  };
+  const unsigned char wifiMediumIcon[] = {
+    0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X8F,0XFF,0XFF,0XFF,0XFF,0X87,0XFF,0XFF,0XFF,0XFF,
+    0X03,0XFF,0XFF,0XFF,0XFE,0X00,0XFF,0XFF,0XFF,0XFE,0X30,0X7F,0XFF,0XFF,0XFE,0X38,
+    0X3F,0XFF,0XFF,0XFC,0X7E,0X0F,0XFF,0XFF,0XFC,0X7F,0X07,0XFF,0XFF,0XF8,0XFF,0XC3,
+    0XFF,0XFF,0XF8,0XFF,0XE0,0XFF,0XFF,0XF8,0XFF,0XE0,0X7F,0XFF,0XF1,0XFF,0XC0,0X3F,
+    0XFF,0XF1,0XFF,0XC0,0X0F,0XFF,0XF1,0XFF,0XC0,0X07,0XFF,0XF1,0XFF,0XC0,0X03,0XFF,
+    0XF3,0XFF,0X80,0X00,0XFF,0XF3,0XFF,0X80,0X00,0X7F,0XF3,0XFF,0X80,0X00,0X3F,0XF3,
+    0XFF,0X80,0X00,0X0F,0XF3,0XFF,0X80,0X00,0X0F,0XF3,0XFF,0X80,0X00,0X3F,0XF3,0XFF,
+    0X80,0X00,0X7F,0XF3,0XFF,0X80,0X00,0XFF,0XF1,0XFF,0XC0,0X03,0XFF,0XF1,0XFF,0XC0,
+    0X07,0XFF,0XF1,0XFF,0XC0,0X0F,0XFF,0XF1,0XFF,0XE0,0X3F,0XFF,0XF8,0XFF,0XE0,0X7F,
+    0XFF,0XF8,0XFF,0XE0,0XFF,0XFF,0XF8,0XFF,0XC3,0XFF,0XFF,0XFC,0X7F,0X07,0XFF,0XFF,
+    0XFC,0X7E,0X0F,0XFF,0XFF,0XFE,0X38,0X3F,0XFF,0XFF,0XFE,0X30,0X7F,0XFF,0XFF,0XFE,
+    0X00,0XFF,0XFF,0XFF,0XFF,0X03,0XFF,0XFF,0XFF,0XFF,0X87,0XFF,0XFF,0XFF,0XFF,0X8F,
+    0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF
+  };
+  const unsigned char wifiLowIcon[] = {
+    0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XCF,0XFF,0XFF,0XFF,0XFF,0X83,0XFF,0XFF,0XFF,0XFF,
+    0X81,0XFF,0XFF,0XFF,0XFF,0X00,0XFF,0XFF,0XFF,0XFF,0X18,0X3F,0XFF,0XFF,0XFE,0X3C,
+    0X1F,0XFF,0XFF,0XFE,0X3F,0X0F,0XFF,0XFF,0XFC,0X7F,0X87,0XFF,0XFF,0XFC,0X7F,0XC3,
+    0XFF,0XFF,0XFC,0X7F,0XE0,0XFF,0XFF,0XFC,0XFF,0XF8,0X7F,0XFF,0XF8,0XFF,0XFC,0X3F,
+    0XFF,0XF8,0XFF,0XFE,0X0F,0XFF,0XF8,0XFF,0XFF,0X07,0XFF,0XF9,0XFF,0XFF,0X83,0XFF,
+    0XF9,0XFF,0XFF,0XE1,0XFF,0XF1,0XFF,0XFF,0XF0,0XFF,0XF1,0XFF,0XFF,0XF8,0X3F,0XF1,
+    0XFF,0XFF,0XFE,0X1F,0XF1,0XFF,0XFF,0XFE,0X1F,0XF1,0XFF,0XFF,0XF8,0X3F,0XF1,0XFF,
+    0XFF,0XF0,0XFF,0XF9,0XFF,0XFF,0XE1,0XFF,0XF9,0XFF,0XFF,0X83,0XFF,0XF8,0XFF,0XFF,
+    0X07,0XFF,0XF8,0XFF,0XFE,0X1F,0XFF,0XF8,0XFF,0XFC,0X3F,0XFF,0XFC,0XFF,0XF8,0X7F,
+    0XFF,0XFC,0X7F,0XE0,0XFF,0XFF,0XFC,0X7F,0XC1,0XFF,0XFF,0XFC,0X7F,0X87,0XFF,0XFF,
+    0XFE,0X3E,0X0F,0XFF,0XFF,0XFE,0X3C,0X1F,0XFF,0XFF,0XFF,0X18,0X3F,0XFF,0XFF,0XFF,
+    0X00,0XFF,0XFF,0XFF,0XFF,0X81,0XFF,0XFF,0XFF,0XFF,0X83,0XFF,0XFF,0XFF,0XFF,0XCF,
+    0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF
+  };
+  
+  if        (signalStrength > -55) { Paint_DrawImage(wifiFullIcon,   150, 150, 40, 40); 
+  } else if (signalStrength > -70) { Paint_DrawImage(wifiMediumIcon, 150, 150, 40, 40);
+  } else {                           Paint_DrawImage(wifiLowIcon,    150, 150, 40, 40); }
 }
 
 void displayWriteError(char errorMessage[256]){

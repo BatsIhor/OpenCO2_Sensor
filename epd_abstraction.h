@@ -14,5 +14,10 @@ void displayWriteTestResults(float voltage, uint16_t sensorStatus, uint16_t seri
 void displayBattery(uint8_t percentage);
 void updateDisplay();
 void displayRainbow();
+void displayQRcode(uint16_t measurements[24][120]);
+void displayMenu(uint8_t selectedOption);
+void displayCalibrationWarning();
+void displayWiFi(bool useWiFi);
+void displayWiFiStrengh();
 
 #endif /* EPD_ABSTRACTION_H */
